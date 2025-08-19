@@ -71,7 +71,7 @@ Google Gemini API Key
 <div align="center">
 
 ⚡ **SME Threat Watch — 중소기업 보안 대응을 더 빠르고 더 스마트하게** ⚡  
-Made with SK Shieldus Rookies 26기 AI 8조 팔색조
+Made by SK Shieldus Rookies 26기 AI 8조 팔색조
 
 </div>
 
