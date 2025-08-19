@@ -57,6 +57,8 @@ Python 3.10+
 
 Google Gemini API Key
 
+## 실행 방법
+pip install streamlit pandas plotly requests beautifulsoup4 fpdf konlpy torch transformers google-generativeai python-dotenv
 
 ## 📖 사용 흐름
 
