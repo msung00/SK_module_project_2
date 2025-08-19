@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 
 def scrape_article(url):
-    #뉴스 기사 크롤링
+    # 뉴스 기사 크롤링
     try:
         res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
         if res.status_code != 200:
@@ -15,7 +15,7 @@ def scrape_article(url):
         soup = BeautifulSoup(res.text, "html.parser")
         title = soup.select_one("#news_title02")  # 제목
         body = soup.select_one("#news_content")   # 본문
-        date = soup.select_one("#news_util01")   # 날짜
+        date = soup.select_one("#news_util01")    # 날짜
 
         return {
             "url": url,
@@ -27,12 +27,12 @@ def scrape_article(url):
         return None
 
 def scrape_by_idx_range(start_idx, end_idx, json_file="articles.json", csv_file="articles.csv"):
-    #idx 범위 뉴스 크롤링 → JSON + CSV 저장
+    # idx 범위 뉴스 크롤링 → JSON + CSV 저장
     missing_idx = []
     count = 0
 
     with open(json_file, "w", encoding="utf-8") as f_json, \
-         open(csv_file, "w", encoding="utf-8-sig", newline="") as f_csv:
+            open(csv_file, "w", encoding="utf-8-sig", newline="") as f_csv:
 
         writer = csv.DictWriter(f_csv, fieldnames=["url", "title", "date", "content"])
         writer.writeheader()
