@@ -54,7 +54,15 @@
 ![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)
 ![Notion](https://img.shields.io/badge/Notion-000000?style=for-the-badge&logo=notion&logoColor=white)
 
----
+## 👨‍💻 개발 팀 및 역할
+**웹 UI/UX 개발 및 데이터 시각화**: Streamlit 프레임워크를 사용하여 사용자 친화적인 웹 인터페이스를 구축하고, 대시보드와 뉴스 분석 페이지 등 주요 기능을 구현했습니다.
+
+**분석 데이터 전처리 및 로직 적용**: 수집된 기사를 텍스트 분석에 적합한 형태로 전처리하고, 업종별 가중치 및 CISA KEV 피드를 기반으로 관심도(위험 점수)를 산정하는 로직을 개발했습니다.
+
+**LLM 기반 콘텐츠 생성 및 최적화**: Gemini API를 활용하여 맞춤형 대응 플레이북을 생성하는 프롬프트 엔지니어링을 담당했습니다.
+
+**데이터베이스 설계 및 관리**: SQLite 데이터베이스를 사용하여 즐겨찾기(뉴스, 대응 플레이북) 기능을 위한 데이터 모델을 설계하고, 데이터의 저장, 조회, 삭제 기능을 구현했습니다.
+
 
 ## 📋 시스템 요구사항
 
@@ -67,8 +75,27 @@
 ## 🚀 실행 방법
 
 ```bash
-# 필수 라이브러리 설치
-pip install streamlit pandas plotly requests beautifulsoup4 fpdf konlpy torch transformers google-generativeai python-dotenv
+레포지토리 클론
+
+git clone [레포지토리 URL]
+cd [프로젝트 폴더명]
+```
+```bash
+필수 라이브러리 설치
+
+pip install streamlit pandas numpy requests beautifulsoup4 fpdf konlpy torch transformers google-generativeai python-dotenv
+```
+```bash
+.env 파일 설정
+프로젝트 루트 디렉토리에 .env 파일을 생성하고, 발급받은 Gemini API 키를 추가합니다.
+
+GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
+```
+```bash
+애플리케이션 실행
+Streamlit을 사용하여 웹 애플리케이션을 실행합니다.
+
+streamlit run Interface.py
 ```
 
 ## 📖 사용 흐름
