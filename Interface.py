@@ -19,6 +19,7 @@ import streamlit as st
 import feedparser
 import torch
 import textwrap
+import sqlite3
 
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -103,7 +104,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 GENERATION_CONFIG = {
     "temperature": 0.5,
-    "max_output_tokens": 1400,
+    "max_output_tokens": 4096,
 }
 GEMINI = genai.GenerativeModel('gemini-1.5-flash', generation_config=GENERATION_CONFIG)
 
@@ -322,7 +323,6 @@ industry_risk_map = {
         "AI 심리전":1.0,"AI 선전 조작":1.0,"AI 기반 여론 조작":1.0,"프롬프트 인젝션":0.9
     }
 }
-
 def ner_inference(sentence: str):
     """NER 기반 토큰→워드 재구성 후 라벨 O 제외 토큰 반환"""
     if not (ner_tokenizer and ner_model and ner_ctx):
@@ -386,7 +386,7 @@ update_keywords_from_cisa(industry_risk_map)
 def analyze_risk_with_model(text: str, industry_type: str):
     """
     1) 가능하면 NER로 엔터티 추출
-    2) 업종별 키워드 가중치 합산으로 점수/레벨 산정
+    2) 업종별 가중치 합산으로 점수/레벨 산정
     3) NER 실패 시, 단순 키워드 매칭 폴백
     """
     risk_dict = industry_risk_map.get(industry_type, {})
@@ -459,10 +459,12 @@ def generate_playbook_with_llm(keywords, company_info, infrastructure, constrain
     mode_line = "가능한 저예산/간소화 모드를 우선 고려" if (constraints and any(x in constraints.lower() for x in ["저예산","budget","비용","한정"])) else "표준 모드로 실행"
     
     # 1) 본문 플레이북 생성 프롬프트
+    # '즉시', '7일', '30일'을 '긴급', '단기', '중장기'로 변경
     prompt = f"""
 당신은 중소기업 보안 전문가입니다. 아래 정보를 바탕으로 **통합 장문 대응 플레이북**을 작성하세요.
 - 중복되는 조치는 통합/정리
-- **즉시(오늘~48h)/7일/30일** 구간으로 나눌 것
+- 각 조치는 **담당자**(예: IT 담당자, 보안 담당자)를 명시하세요.
+- **긴급/단기/중장기** 구간으로 나눌 것
 - {mode_line}
 - **구체 설정/서비스명**(예: AWS/GCP/Azure, EDR/SIEM/MFA 등)을 포함
 - 각 조치는 **검증 기준(어떻게 확인할지)**을 명시
@@ -484,9 +486,9 @@ def generate_playbook_with_llm(keywords, company_info, infrastructure, constrain
 
 출력 형식: Markdown 섹션
 1) 상황요약
-2) 즉시(오늘~48h)
-3) 7일
-4) 30일
+2) 긴급
+3) 단기
+4) 중장기
 5) 탐지룰/모니터링(로그 소스, 룰 또는 쿼리 개요)
 6) 커뮤니케이션(임직원 공지/훈련/외부 보고)
 7) 체크리스트(측정 가능한 완료 조건)
@@ -669,10 +671,144 @@ def create_pdf_report(report_data, company_name="중소기업"):
         out = out.encode("latin1", errors="ignore")
     return bytes(out)
 
+# ============================================================
+# 6) SQLite 즐겨찾기 관리 모듈
+# ============================================================
+def init_db():
+    conn = sqlite3.connect('bookmarks.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS saved_news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            url TEXT UNIQUE,
+            summary TEXT,
+            keywords TEXT,
+            risk_level TEXT,
+            risk_score REAL,
+            saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS saved_playbooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            summary TEXT,
+            playbook_content TEXT,
+            keywords TEXT,
+            saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def save_news_to_favorites(news_item):
+    conn = sqlite3.connect('bookmarks.db')
+    c = conn.cursor()
+    try:
+        c.execute('''
+            INSERT INTO saved_news (title, url, summary, keywords, risk_level, risk_score)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            news_item['title'],
+            news_item['url'],
+            news_item['summary'],
+            json.dumps(news_item['keywords'], ensure_ascii=False),
+            news_item['risk_level'],
+            news_item['risk_score']
+        ))
+        conn.commit()
+        st.success(f"'{news_item['title']}' 기사를 즐겨찾기에 추가했습니다.")
+    except sqlite3.IntegrityError:
+        st.warning(f"'{news_item['title']}' 기사는 이미 즐겨찾기에 있습니다.")
+    finally:
+        conn.close()
+
+def get_saved_news():
+    conn = sqlite3.connect('bookmarks.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM saved_news ORDER BY saved_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def delete_news_from_favorites(news_id):
+    conn = sqlite3.connect('bookmarks.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM saved_news WHERE id = ?", (news_id,))
+    conn.commit()
+    conn.close()
+    # st.rerun() # This was the source of the extra rerun
+
+def save_playbook_to_favorites(playbook_title, playbook_content, report_summary, llm_selected_keywords):
+    conn = sqlite3.connect('bookmarks.db')
+    c = conn.cursor()
+    try:
+        clean_playbook_content = playbook_content.replace('<br>', '\n')
+        c.execute('''
+            INSERT INTO saved_playbooks (title, summary, playbook_content, keywords)
+            VALUES (?, ?, ?, ?)
+        ''', (
+            f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {playbook_title}",
+            report_summary,
+            clean_playbook_content,
+            json.dumps([k['keyword'] for k in llm_selected_keywords], ensure_ascii=False)
+        ))
+        conn.commit()
+        st.success("대응 플레이북을 즐겨찾기에 추가했습니다.")
+    except sqlite3.IntegrityError:
+        st.warning("플레이북 저장 중 오류가 발생했습니다.")
+    finally:
+        conn.close()
+
+def get_saved_playbooks():
+    conn = sqlite3.connect('bookmarks.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM saved_playbooks ORDER BY saved_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def delete_playbook_from_favorites(playbook_id):
+    conn = sqlite3.connect('bookmarks.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM saved_playbooks WHERE id = ?", (playbook_id,))
+    conn.commit()
+    conn.close()
+    # st.rerun() # This was the source of the extra rerun
 
 # ============================================================
-# 6) 사이드바 (환경 설정 / RSS 전용)
+# 7) 사이드바 (환경 설정 / RSS 전용)
 # ============================================================
+init_db()
+
+# 회사명은 전역 변수로 고정
+company_name = "중소기업"
+
+# 세션 상태를 초기화
+if 'analysis_started' not in st.session_state:
+    st.session_state.analysis_started = False
+    st.session_state.news_data = []
+    st.session_state.risk_keywords = []
+    st.session_state.playbook_content = ""
+    st.session_state.report_summary = ""
+    st.session_state.llm_selected_keywords = []
+
+    # 사이드바 위젯의 초기값을 세션 상태에 저장
+    st.session_state.company_size = "소규모 (10-50명)"
+    st.session_state.industry_type = "IT/소프트웨어"
+    st.session_state.infrastructure = "AWS"
+    st.session_state.constraints = ""
+    st.session_state.user_interest = ""
+
+def set_sidebar_state():
+    """사이드바 위젯의 변경사항을 세션 상태에 저장"""
+    st.session_state.company_size = st.session_state.get('sidebar_company_size', st.session_state.company_size)
+    st.session_state.industry_type = st.session_state.get('sidebar_industry_type', st.session_state.industry_type)
+    st.session_state.infrastructure = st.session_state.get('sidebar_infrastructure', st.session_state.infrastructure)
+    st.session_state.constraints = st.session_state.get('sidebar_constraints', st.session_state.constraints)
+    st.session_state.user_interest = st.session_state.get('sidebar_user_interest', st.session_state.user_interest)
+
 with st.sidebar:
     st.markdown("""
     <div class="sidebar-logo">
@@ -682,14 +818,19 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.subheader("🏢 기업 정보 설정")
-    company_size = st.selectbox("기업 규모", ["소규모 (10-50명)", "중소규모 (50-200명)", "중규모 (200-500명)"])
-    industry_type = st.selectbox("업종", ["IT/소프트웨어", "제조업", "금융업", "의료업", "교육업", "기타"])
+    company_size = st.selectbox("기업 규모", ["소규모 (10-50명)", "중소규모 (50-200명)", "중규모 (200-500명)"],
+                                index=["소규모 (10-50명)", "중소규모 (50-200명)", "중규모 (200-500명)"].index(st.session_state.company_size),
+                                key='sidebar_company_size', on_change=set_sidebar_state)
+    industry_type = st.selectbox("업종", ["IT/소프트웨어", "제조업", "금융업", "의료업", "교육업", "기타"],
+                                 index=["IT/소프트웨어", "제조업", "금융업", "의료업", "교육업", "기타"].index(st.session_state.industry_type),
+                                 key='sidebar_industry_type', on_change=set_sidebar_state)
 
     st.subheader("🌐 인프라 및 제약사항")
-    infrastructure = st.selectbox("인프라 환경", ["AWS", "Azure", "GCP", "On-premise", "Hybrid"])
-    constraints = st.text_area("보안 정책/예산 등 제한사항", value="")
-    user_interest = st.text_area("관심 분야 키워드(쉼표 구분)", value="")
-    st.session_state.user_interest = user_interest
+    infrastructure = st.selectbox("인프라 환경", ["AWS", "Azure", "GCP", "On-premise", "Hybrid"],
+                                  index=["AWS", "Azure", "GCP", "On-premise", "Hybrid"].index(st.session_state.infrastructure),
+                                  key='sidebar_infrastructure', on_change=set_sidebar_state)
+    constraints = st.text_area("보안 정책/예산 등 제한사항", value=st.session_state.constraints, key='sidebar_constraints', on_change=set_sidebar_state)
+    user_interest = st.text_area("관심 분야 키워드(쉼표 구분)", value=st.session_state.user_interest, key='sidebar_user_interest', on_change=set_sidebar_state)
 
     st.divider()
     if st.button("🔍 분석 시작", type="primary"):
@@ -709,7 +850,7 @@ with st.sidebar:
             keyword_counts = {}
             for art in articles:
                 combined = f"{art['title']} {art['content']}"
-                risk_level, kws, score = analyze_risk_with_model(combined, industry_type)
+                risk_level, kws, score = analyze_risk_with_model(combined, st.session_state.industry_type)
                 for k in kws:
                     keyword_counts[k] = keyword_counts.get(k, 0) + 1
                 news_data.append({
@@ -721,15 +862,14 @@ with st.sidebar:
                     "risk_level": risk_level,
                     "risk_score": score,
                     "keywords": kws,
-                    "url": art['url'],
-                    "summary_llm": "" # LLM 요약 결과를 저장할 필드 추가
+                    "url": art['url']
                 })
-            user_interest_list = [kw.strip() for kw in user_interest.split(',') if kw.strip()]
+            user_interest_list = [kw.strip() for kw in st.session_state.user_interest.split(',') if kw.strip()]
             for uk in user_interest_list:
                 keyword_counts[uk] = keyword_counts.get(uk, 0) + 1
             st.session_state.news_data = sorted(news_data, key=lambda x: x['risk_score'], reverse=True)
             st.session_state.risk_keywords = [
-                {"keyword": kw, "frequency": cnt, "risk_level": analyze_risk_with_model(kw, industry_type)[0]}
+                {"keyword": kw, "frequency": cnt, "risk_level": analyze_risk_with_model(kw, st.session_state.industry_type)[0]}
                 for kw, cnt in sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True)
             ]
 
@@ -742,11 +882,10 @@ with st.sidebar:
                 news_briefs.append(brief)
 
         with st.spinner("LLM 플레이북 생성 중..."):
-            company_name = "중소기업"
-            company_info = {"name": company_name, "size": company_size, "industry": industry_type}
+            company_info = {"name": company_name, "size": st.session_state.company_size, "industry": st.session_state.industry_type}
             keywords_list = [k["keyword"] for k in st.session_state.risk_keywords]
             st.session_state.playbook_content = generate_playbook_with_llm(
-                keywords_list, company_info, infrastructure, constraints, news_briefs=news_briefs
+                keywords_list, company_info, st.session_state.infrastructure, st.session_state.constraints, news_briefs=news_briefs
             )
 
         st.session_state.report_summary = f"총 {len(st.session_state.news_data)}개 뉴스 분석 완료."
@@ -754,7 +893,7 @@ with st.sidebar:
         st.rerun()
 
 # ============================================================
-# 7) 메인 헤더
+# 8) 메인 헤더
 # ============================================================
 st.markdown("""
 <div class="main-header">
@@ -764,16 +903,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 8) 탭: 대시보드/뉴스/플레이북
+# 9) 탭: 대시보드/뉴스/플레이북/즐겨찾기
 # ============================================================
-tab1, tab2, tab3 = st.tabs([
-    "📊 대시보드", "📰 뉴스 분석", "📋 대응 플레이북"
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 대시보드", "📰 뉴스 분석", "📋 대응 플레이북", "⭐ 즐겨찾기"
 ])
 
 # --- 대시보드
 with tab1:
     st.header("📊 보안 관심/위험 대시보드")
-    if 'analysis_started' not in st.session_state:
+    if not st.session_state.analysis_started:
         st.info("👈 사이드바에서 기업 정보를 설정하고 '분석 시작'을 눌러주세요.")
     else:
         top_news = st.session_state.news_data[:2]
@@ -783,7 +922,6 @@ with tab1:
             for current in top_news:
                 css_class = "risk-high" if current["risk_level"] == "높음" else "risk-medium" if current["risk_level"] == "중간" else "risk-low"
                 
-                # 대시보드에서 요약 기능 제거 (대신 뉴스 분석 탭에서 제공)
                 summary_content = current['summary'] + " (더 자세한 요약은 '뉴스 분석' 탭에서 확인하세요.)"
     
                 st.markdown(f"""
@@ -802,15 +940,14 @@ with tab1:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-                st.markdown("---") # 항목 간 구분선
+                st.markdown("---")
 
 # --- 뉴스 분석
 with tab2:
     st.header("📰 최신 보안 뉴스 분석")
-    if 'analysis_started' not in st.session_state:
+    if not st.session_state.analysis_started:
         st.info("👈 사이드바에서 기업 정보를 설정하고 '분석 시작'을 눌러주세요.")
     else:
-        # 관심 키워드 우선 정렬 제거, 기본 위험도 순 정렬 유지
         sorted_news = st.session_state.news_data
         
         page_size = 10
@@ -826,23 +963,26 @@ with tab2:
             css_class = "risk-high" if news["risk_level"] == "높음" \
                 else "risk-medium" if news["risk_level"] == "중간" else "risk-low"
             
-            # 하나의 markdown 블록으로 전체 뉴스 항목 표시
-            st.markdown(f"""
-            <div class="news-item {css_class}">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-                    <h5 style="margin:0;color:#2c3e50;">
-                        <a href="{news['url']}" target="_blank">{news['title']}</a>
-                    </h5>
-                    <span style="background:{'#e74c3c' if news['risk_level']=='높음' else '#f39c12' if news['risk_level']=='중간' else '#27ae60'};color:white;padding:0.3rem 0.8rem;border-radius:15px;font-size:0.8rem;font-weight:bold;white-space:nowrap;">
-                        관심도: {news['risk_level']} ({news['risk_score']:.2f})
-                    </span>
+            with st.container():
+                st.markdown(f"""
+                <div class="news-item {css_class}">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                        <h5 style="margin:0;color:#2c3e50;">
+                            <a href="{news['url']}" target="_blank">{news['title']}</a>
+                        </h5>
+                        <span style="background:{'#e74c3c' if news['risk_level']=='높음' else '#f39c12' if news['risk_level']=='중간' else '#27ae60'};color:white;padding:0.3rem 0.8rem;border-radius:15px;font-size:0.8rem;font-weight:bold;white-space:nowrap;">
+                            관심도: {news['risk_level']} ({news['risk_score']:.2f})
+                        </span>
+                    </div>
+                    <p style="color:#555; margin-bottom:1rem; white-space: pre-wrap;">{news['summary']}</p>
+                    <div style="color:#888; font-size:0.9rem;">
+                        <strong>키워드:</strong> {', '.join(news['keywords'])} | {news['source']} | {news['published']}
+                    </div>
                 </div>
-                <p style="color:#555; margin-bottom:1rem; white-space: pre-wrap;">{news['summary']}</p>
-                <div style="color:#888; font-size:0.9rem;">
-                    <strong>키워드:</strong> {', '.join(news['keywords'])} | {news['source']} | {news['published']}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+                
+                if st.button("💾 즐겨찾기 추가", key=f"save_news_btn_{idx}_{st.session_state.current_page}"):
+                    save_news_to_favorites(news)
             
         st.divider()
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -859,15 +999,14 @@ with tab2:
 
 # --- 대응 플레이북
 with tab3:
-    if 'analysis_started' not in st.session_state:
+    if not st.session_state.analysis_started:
         st.info("👈 사이드바에서 '분석 시작'을 눌러주세요.")
     else:
-        # PDF 다운로드 버튼을 헤더 옆에 배치
         col1, col2 = st.columns([0.7, 0.3])
         with col1:
             st.markdown("### 📋 AI 생성 대응 플레이북")
         with col2:
-            st.markdown('<div style="height: 1.5rem;"></div>', unsafe_allow_html=True) # 헤더와 높이 맞추기
+            st.markdown('<div style="height: 1.5rem;"></div>', unsafe_allow_html=True)
             report_data = {
                 "summary": st.session_state.report_summary,
                 "keywords": st.session_state.risk_keywords,
@@ -878,18 +1017,82 @@ with tab3:
                 label="📄 PDF 다운로드",
                 data=pdf_output,
                 file_name=f"보안_분석_보고서_중소기업.pdf",
-                mime="application/pdf"
+                mime="application/pdf",
+                key="playbook_pdf_download"
             )
-
+        
+        if st.button("⭐ 플레이북 즐겨찾기", key="save_playbook_btn"):
+            save_playbook_to_favorites(
+                "AI 생성 대응 플레이북",
+                st.session_state.report_summary,
+                st.session_state.playbook_content,
+                st.session_state.llm_selected_keywords
+            )
+            
         st.markdown(
             f"""<div class="recommendation-box">
-            <p style="white-space: pre-wrap;">{st.session_state.playbook_content}</p></div>""",
+            <p style="white-space: pre-wrap;">{st.session_state.playbook_content.replace('<br>', '\n')}</p></div>""",
             unsafe_allow_html=True
         )
         if st.session_state.llm_selected_keywords:
             st.subheader("🧩 LLM이 선별한 중요 키워드(Top)")
             df_llm_kw = pd.DataFrame(st.session_state.llm_selected_keywords)
             st.dataframe(df_llm_kw, use_container_width=True)
+
+# --- 즐겨찾기
+with tab4:
+    st.header("⭐ 즐겨찾기")
+    saved_news = get_saved_news()
+    saved_playbooks = get_saved_playbooks()
+
+    if not saved_news and not saved_playbooks:
+        st.info("저장된 기사나 플레이북이 없습니다. '뉴스 분석' 탭에서 기사를, '대응 플레이북' 탭에서 플레이북을 저장할 수 있습니다.")
+    else:
+        st.subheader("저장된 플레이북")
+        if saved_playbooks:
+            for playbook in saved_playbooks:
+                pb_id, title, summary, content, kws, saved_at = playbook
+                with st.expander(f"**{title}** (저장일: {saved_at.split(' ')[0]})"):
+                    st.markdown(f"**요약:** {summary}")
+                    st.markdown("---")
+                    st.markdown(f"**내용:**\n\n{content}", unsafe_allow_html=True)
+                    st.markdown("---")
+                    st.markdown(f"**주요 키워드:** {', '.join(json.loads(kws))}")
+                    if st.button("❌ 삭제", key=f"delete_pb_btn_{pb_id}"):
+                        delete_playbook_from_favorites(pb_id)
+        else:
+            st.info("저장된 플레이북이 없습니다.")
+
+        st.markdown("---")
+        st.subheader("저장된 뉴스 기사")
+        if saved_news:
+            for news in saved_news:
+                news_id, title, url, summary, kws, risk_level, risk_score, saved_at = news
+                st.markdown(f"""
+                    <div class="news-item risk-{risk_level.lower()}">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                            <h5 style="margin:0;color:#2c3e50;">
+                                <a href="{url}" target="_blank">{title}</a>
+                            </h5>
+                            <span style="background:{'#e74c3c' if risk_level=='높음' else '#f39c12' if risk_level=='중간' else '#27ae60'};color:white;padding:0.3rem 0.8rem;border-radius:15px;font-size:0.8rem;font-weight:bold;white-space:nowrap;">
+                                관심도: {risk_level} ({risk_score:.2f})
+                            </span>
+                        </div>
+                        <p style="color:#555; margin-bottom:1rem; white-space: pre-wrap;">{summary}</p>
+                        <div style="color:#888; font-size:0.9rem;">
+                            <strong>키워드:</strong> {', '.join(json.loads(kws))} | 저장일: {saved_at.split(' ')[0]}
+                        </div>
+                        <div style="text-align:right; margin-top:1rem;">
+                            <a href="?delete_news_id={news_id}" target="_self" style="
+                                background: #e74c3c; color: white; border: none; border-radius: 5px;
+                                padding: 0.5rem 1rem; font-weight: 600; cursor: pointer;
+                                text-decoration: none; display: inline-block;
+                            ">❌ 삭제</a>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("저장된 뉴스 기사가 없습니다.")
 
 # 푸터
 st.divider()
@@ -900,3 +1103,14 @@ st.markdown(
     </div>""",
     unsafe_allow_html=True
 )
+
+# ============================================================
+# 10) 삭제 요청 처리 (쿼리 파라미터 기반)
+# ============================================================
+query_params = st.query_params
+if "delete_news_id" in query_params:
+    delete_news_from_favorites(query_params["delete_news_id"])
+    st.experimental_set_query_params()
+elif "delete_playbook_id" in query_params:
+    delete_playbook_from_favorites(query_params["delete_playbook_id"])
+    st.experimental_set_query_params()
