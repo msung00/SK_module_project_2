@@ -14,6 +14,7 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime
 import re
+import feedparser
 
 # Load environment variables from .env file
 load_dotenv()
@@ -25,9 +26,9 @@ def scrape_article(url):
         if res.status_code != 200:
             return None
         soup = BeautifulSoup(res.text, "html.parser")
-        title = soup.select_one("#news_title02")
-        body = soup.select_one("#news_content")
-        date = soup.select_one("#news_util01")
+        title = soup.select_one("#news_title02") or soup.select_one("h4.tit")
+        body = soup.select_one("#news_content") or soup.select_one("div.view_txt")
+        date = soup.select_one("#news_util01") or soup.select_one("span.date")
         return {
             "url": url,
             "title": title.get_text(strip=True) if title else "제목 없음",
@@ -37,18 +38,41 @@ def scrape_article(url):
     except Exception:
         return None
 
-def scrape_boannews_by_idx(start_idx, end_idx):
-    articles = []
-    missing_idx = []
-    for idx in range(start_idx, end_idx + 1):
-        url = f"https://www.boannews.com/media/view.asp?idx={idx}"
-        article_data = scrape_article(url)
-        if article_data:
-            articles.append(article_data)
-        else:
-            missing_idx.append(idx)
-        time.sleep(0.1)
-    return articles, missing_idx
+def fetch_latest_news():
+    rss_list = [
+        ("SECURITY", "http://www.boannews.com/media/news_rss.xml?mkind=1"),
+        ("IT", "http://www.boannews.com/media/news_rss.xml?mkind=2"),
+        ("SAFETY", "http://www.boannews.com/media/news_rss.xml?mkind=4"),
+        ("사건ㆍ사고", "http://www.boannews.com/media/news_rss.xml?kind=1"),
+        ("공공ㆍ정책", "http://www.boannews.com/media/news_rss.xml?kind=2"),
+        ("비즈니스", "http://www.boannews.com/media/news_rss.xml?kind=3"),
+        ("국제", "http://www.boannews.com/media/news_rss.xml?kind=4"),
+        ("테크", "http://www.boannews.com/media/news_rss.xml?kind=5"),
+    ]
+    
+    seen_urls = set()
+    all_articles = []
+    
+    for feed_name, rss_url in rss_list:
+        try:
+            feed = feedparser.parse(rss_url)
+        except Exception:
+            continue
+        
+        for entry in getattr(feed, "entries", []):
+            url = getattr(entry, "link", None)
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            article_data = scrape_article(url)
+            if article_data and article_data['title'] != '제목 없음':
+                article_data["source"] = feed_name # 출처 정보 추가
+                all_articles.append(article_data)
+            
+            time.sleep(0.1)
+    
+    return all_articles
 
 # --- 1. KoELECTRA 모델 로딩 (가상 함수) ---
 @st.cache_resource
@@ -81,9 +105,10 @@ def preprocess_text(text):
                     if pos in ['Noun', 'Verb', 'Adjective']]
     return " ".join(preprocessed)
 
-# --- 4. KoELECTRA 기반 키워드/위험도 분석 (가상 함수 -> 키워드 기반 로직으로 대체) ---
-def analyze_risk_with_model(text):
-    risk_keywords_map = {
+# --- 4. KoELECTRA 기반 키워드/관심도 분석 (가상 함수 -> 키워드 기반 로직으로 대체) ---
+def analyze_interest_with_model(text):
+    # 관심도 키워드 점수표
+    interest_keywords_map = {
         "ATTACK": {
             "랜섬웨어": 1.0, "제로데이": 1.0, "피싱": 0.9, "DDoS": 0.8, "악성코드": 0.9,
             "해킹": 0.9, "공격": 0.8, "침해": 0.8, "유출": 0.8, "탈취": 0.8
@@ -104,7 +129,7 @@ def analyze_risk_with_model(text):
     extracted_keywords = []
     total_score = 0
     
-    for category, keywords in risk_keywords_map.items():
+    for category, keywords in interest_keywords_map.items():
         for keyword, score in keywords.items():
             if re.search(r'\b' + re.escape(keyword) + r'\b', text, re.I):
                 extracted_keywords.append(keyword)
@@ -112,37 +137,58 @@ def analyze_risk_with_model(text):
     
     extracted_keywords = list(set(extracted_keywords))
     if total_score >= 2.0:
-        risk_level = "높음"
+        interest_level = "높음"
     elif total_score >= 0.8:
-        risk_level = "중간"
+        interest_level = "중간"
     else:
-        risk_level = "낮음"
+        interest_level = "낮음"
     
-    return risk_level, extracted_keywords, total_score
+    return interest_level, extracted_keywords, total_score
 
-# --- 5. LLM 기반 대응 방안 생성 (수정) ---
-def generate_playbook_with_llm(keywords, company_info, playbook_detail, infrastructure, constraints):
+# --- 5. LLM 기반 대응 방안 생성 및 요약 함수 (수정) ---
+def generate_playbook_with_llm(keywords, company_info, infrastructure, constraints, user_interest):
+    try:
+        keywords_for_prompt = keywords[:10]
+        
+        prompt = f"""
+        당신은 중소기업을 위한 보안 전문가입니다. 다음 정보를 기반으로 맞춤형 보안 대응 플레이북을 생성해주세요.
+        - 기업명: {company_info['name']}
+        - 기업 규모: {company_info['size']}
+        - 업종: {company_info['industry']}
+        - 인프라 환경: {infrastructure}
+        - 주요 위협 키워드: {', '.join(keywords_for_prompt)}
+        - 사용자의 관심 분야: {user_interest}
+        - 고려해야 할 제한사항: {constraints}
+        - 상세도 수준: 상세형
+
+        위협에 대한 즉시 대응 조치와 중장기 대응 방안을 포함하고, 이해하기 쉬운 체크리스트 형식으로 정리해주세요.
+        """
+        response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
+        return response.text
+    except Exception as e:
+        # 이 부분을 수정하여 오류 내용을 터미널에 출력합니다.
+        st.error(f"Gemini API 호출 중 오류가 발생했습니다.")
+        print("="*50)
+        print("Gemini API 호출 오류 상세 내용:")
+        print(e)
+        print("="*50)
+        return "플레이북 생성에 실패했습니다. 터미널의 오류 내용을 확인해주세요."
+
+@st.cache_data(show_spinner=False)
+def generate_article_summary(article_title, article_content):
     prompt = f"""
-    당신은 중소기업을 위한 보안 전문가입니다. 다음 정보를 기반으로 맞춤형 보안 대응 플레이북을 생성해주세요.
-    - 기업명: {company_info['name']}
-    - 기업 규모: {company_info['size']}
-    - 업종: {company_info['industry']}
-    - 인프라 환경: {infrastructure}
-    - 주요 위협 키워드: {', '.join(keywords)}
-    - 상세도 수준: {playbook_detail}
-    - 고려해야 할 제한사항: {constraints}
-
-    위협에 대한 즉시 대응 조치와 중장기 대응 방안을 포함하고, 이해하기 쉬운 체크리스트 형식으로 정리해주세요.
+    아래 뉴스 기사를 5~6줄로 간결하게 요약해 주세요.
+    제목: {article_title}
+    내용: {article_content}
     """
     try:
         response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
         return response.text
     except Exception as e:
-        st.error(f"Gemini API 호출 오류: {e}")
-        return "플레이북 생성에 실패했습니다. API 키를 확인해주세요."
+        return "요약 생성에 실패했습니다."
 
 # --- 6. PDF 보고서 생성 모듈 ---
-def create_pdf_report(report_data):
+def create_pdf_report(report_data, company_name="중소기업"):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -151,7 +197,7 @@ def create_pdf_report(report_data):
     pdf.add_font('NanumGothicBold', '', 'font/NanumGothicBold.ttf', uni=True)
 
     pdf.set_font('NanumGothicBold', '', 20)
-    pdf.cell(0, 10, '중소기업 보안 위험 분석 보고서', 0, 1, 'C')
+    pdf.cell(0, 10, '중소기업 보안 관심도 분석 보고서', 0, 1, 'C')
     pdf.ln(10)
 
     pdf.set_font('NanumGothicBold', '', 14)
@@ -161,10 +207,10 @@ def create_pdf_report(report_data):
     pdf.ln(5)
 
     pdf.set_font('NanumGothicBold', '', 14)
-    pdf.cell(0, 10, '2. 주요 위험 키워드', 0, 1)
+    pdf.cell(0, 10, '2. 주요 관심 키워드', 0, 1)
     pdf.set_font('NanumGothic', '', 12)
     for kw in report_data['keywords']:
-        pdf.multi_cell(0, 7, f"- {kw['keyword']}: {kw['risk_level']} (빈도: {kw['frequency']})")
+        pdf.multi_cell(0, 7, f"- {kw['keyword']}: {kw['interest_level']}")
     pdf.ln(5)
     
     pdf.set_font('NanumGothicBold', '', 14)
@@ -177,7 +223,7 @@ def create_pdf_report(report_data):
 
 # --- Streamlit UI 구성 ---
 st.set_page_config(
-    page_title="중소기업 보안 위험 분석 시스템",
+    page_title="중소기업 보안 관심도 분석 시스템",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -192,25 +238,6 @@ st.markdown("""
         margin-bottom: 2rem;
         color: white;
         text-align: center;
-    }
-    .metric-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        border-left: 4px solid #667eea;
-        margin-bottom: 1rem;
-    }
-    .risk-high { border-left-color: #e74c3c !important; background: linear-gradient(135deg, #fff5f5 0%, #fed7d7 100%); }
-    .risk-medium { border-left-color: #f39c12 !important; background: linear-gradient(135deg, #fffbf0 0%, #feebc8 100%); }
-    .risk-low { border-left-color: #27ae60 !important; background: linear-gradient(135deg, #f0fff4 0%, #c6f6d5 100%); }
-    .news-item {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 8px;
-        margin-bottom: 1rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        border-left: 3px solid #3498db;
     }
     .recommendation-box {
         background: linear-gradient(135deg, #f8f9ff 0%, #e8f2ff 100%);
@@ -228,6 +255,7 @@ st.markdown("""
         color: white;
     }
     .stSelectbox > div > div { background-color: #f8f9fa; }
+    /* 버튼 배경색상 변경 */
     .stButton > button {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         color: white;
@@ -237,10 +265,26 @@ st.markdown("""
         font-weight: 600;
         width: 100%;
     }
+    /* 버튼 텍스트가 잘 보이도록 조정 */
+    .stButton > button > div > p {
+        color: white !important;
+        font-weight: bold;
+    }
     .stButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
     }
+    .news-item {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        border-left: 3px solid #3498db;
+    }
+    .risk-high { border-left-color: #e74c3c !important; }
+    .risk-medium { border-left-color: #f39c12 !important; }
+    .risk-low { border-left-color: #27ae60 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -249,24 +293,20 @@ with st.sidebar:
     st.markdown("""
     <div class="sidebar-logo">
         <h2>🛡️ SecureWatch</h2>
-        <p>중소기업 보안 위험 분석</p>
+        <p>중소기업 보안 관심도 분석</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.subheader("🏢 기업 정보 설정")
-    company_name = st.text_input("회사명", value="ABC 소프트웨어")
+    company_name = "중소기업"
     company_size = st.selectbox("기업 규모", ["소규모 (10-50명)", "중소규모 (50-200명)", "중규모 (200-500명)"])
     industry_type = st.selectbox("업종", ["IT/소프트웨어", "제조업", "금융업", "의료업", "교육업", "기타"])
     
     st.subheader("🌐 인프라 및 제약사항")
     infrastructure = st.selectbox("인프라 환경", ["AWS", "Azure", "GCP", "On-premise", "Hybrid"])
-    constraints = st.text_area("보안 정책/예산 등 제한사항", value="월 예산 50만원 이하.")
+    constraints = st.text_area("보안 정책/예산 등 제한사항", value="")
+    user_interest = st.text_area("관심 분야 (예: 클라우드 보안, 개인정보보호)", value="")
     
-    st.divider()
-    
-    st.subheader("⚙️ 분석 설정")
-    risk_level_setting = st.selectbox("위험도", ["상", "중", "하"], index=0)
-
     st.divider()
     
     if st.button("🔍 분석 시작", type="primary"):
@@ -277,7 +317,7 @@ with st.sidebar:
         st.session_state.report_summary = ""
 
         with st.spinner("최신 보안 뉴스를 수집 및 분석 중입니다..."):
-            scraped_articles, missing_indices = scrape_boannews_by_idx(138700, 138770)
+            scraped_articles = fetch_latest_news()
             
             st.session_state.all_articles = scraped_articles
             
@@ -285,35 +325,42 @@ with st.sidebar:
             keyword_counts = {}
             for news in scraped_articles:
                 combined_text = news['title'] + " " + news['content']
-                risk_level, keywords, risk_score = analyze_risk_with_model(combined_text)
+                interest_level, keywords, interest_score = analyze_interest_with_model(combined_text)
                 
                 for kw in keywords:
                     keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
                 
                 news_item = {
                     "title": news['title'],
-                    "summary": news['content'][:150] + "..." if len(news['content']) > 150 else news['content'],
-                    "source": "보안뉴스",
+                    "summary": news['content'][:250] + "..." if len(news['content']) > 250 else news['content'],
+                    "full_content": news['content'],
+                    "source": news.get('source', '보안뉴스'),
                     "published": news['date'],
-                    "risk_score": risk_score,
+                    "interest_score": interest_score,
                     "keywords": keywords,
-                    "risk_level": risk_level,
-                    "url": news['url'] # url 추가
+                    "interest_level": interest_level,
+                    "url": news['url']
                 }
                 st.session_state.news_data.append(news_item)
             
+            user_interest_list = [kw.strip() for kw in user_interest.split(',') if kw.strip()]
+            for user_kw in user_interest_list:
+                keyword_counts[user_kw] = keyword_counts.get(user_kw, 0) + 1
+
             st.session_state.risk_keywords = [
-                {"keyword": kw, "frequency": count, "risk_level": analyze_risk_with_model(kw)[0]}
+                {"keyword": kw, "frequency": count, "interest_level": analyze_interest_with_model(kw)[0]}
                 for kw, count in keyword_counts.items()
             ]
+            st.session_state.news_data = sorted(st.session_state.news_data, key=lambda x: x['interest_score'], reverse=True)
 
-        st.session_state.playbook_content = generate_playbook_with_llm(
-            list(keyword_counts.keys()),
-            {"name": company_name, "size": company_size, "industry": industry_type},
-            risk_level_setting,
-            infrastructure,
-            constraints
-        )
+        with st.spinner("AI가 맞춤형 플레이북을 생성하고 있습니다..."):
+            company_info = {"name": company_name, "size": company_size, "industry": industry_type}
+            keywords_list = list(keyword_counts.keys())
+            
+            st.session_state.playbook_content = generate_playbook_with_llm(
+                keywords_list, company_info, infrastructure, constraints, user_interest
+            )
+
         st.session_state.report_summary = f"총 {len(st.session_state.news_data)}개의 뉴스를 스크래핑하고 분석했습니다."
         
         st.success("✅ 분석 완료! 아래 탭에서 결과를 확인하세요.")
@@ -322,69 +369,57 @@ with st.sidebar:
 # 메인 헤더
 st.markdown("""
 <div class="main-header">
-    <h1>🛡️ 중소기업 보안 위험 분석 시스템</h1>
-    <p>AI 기반 최신 보안 위협 분석 및 맞춤형 대응 방안 제공</p>
+    <h1>🛡️ 중소기업 보안 관심도 분석 시스템</h1>
+    <p>AI 기반 실시간 보안 위협 분석 및 맞춤형 대응 방안 제공</p>
 </div>
 """, unsafe_allow_html=True)
 
 # 메인 탭 구성
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 대시보드", "📰 뉴스 분석", "🎯 위험 키워드", "📋 대응 플레이북", "📄 보고서 다운로드"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 대시보드", "📰 뉴스 분석", "🎯 관심 키워드", "📋 대응 플레이북", "📄 보고서 다운로드"])
 
 # --- 대시보드 탭 ---
 with tab1:
-    st.header("📊 보안 위험 대시보드")
+    st.header("📊 보안 관심도 대시보드")
     if 'analysis_started' not in st.session_state:
         st.info("👈 사이드바에서 기업 정보를 설정하고 '분석 시작' 버튼을 눌러주세요.")
     else:
-        col1, col2, col3, col4 = st.columns(4)
-        high_risk_count = sum(1 for news in st.session_state.news_data if news['risk_level'] == "높음")
-        medium_risk_count = sum(1 for news in st.session_state.news_data if news['risk_level'] == "중간")
-        with col1:
-            st.markdown(f"""<div class="metric-card"><h3 style="color: #667eea; margin: 0;">📰 수집된 뉴스</h3><h2 style="margin: 0.5rem 0;">{len(st.session_state.news_data)}</h2><p style="color: #666; margin: 0;">총 기사 수</p></div>""", unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"""<div class="metric-card risk-high"><h3 style="color: #e74c3c; margin: 0;">⚠️ 고위험 알림</h3><h2 style="margin: 0.5rem 0;">{high_risk_count}</h2><p style="color: #666; margin: 0;">(키워드 기반)</p></div>""", unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"""<div class="metric-card risk-medium"><h3 style="color: #f39c12; margin: 0;">🔶 중위험 알림</h3><h2 style="margin: 0.5rem 0;">{medium_risk_count}</h2><p style="color: #666; margin: 0;">(키워드 기반)</p></div>""", unsafe_allow_html=True)
-        with col4:
-            st.markdown(f"""<div class="metric-card"><h3 style="color: #2c3e50; margin: 0;">📈 분석 키워드</h3><h2 style="margin: 0.5rem 0;">{len(st.session_state.risk_keywords)}</h2><p style="color: #666; margin: 0;">(고유 키워드 수)</p></div>""", unsafe_allow_html=True)
+        st.markdown("<h3 style='margin-top:2rem; font-size: 2rem;'>주요 보안 뉴스</h3>", unsafe_allow_html=True)
+        
+        top_news_to_display = st.session_state.news_data[:2]
+        
+        if not top_news_to_display:
+            st.info("현재 분석된 뉴스가 없습니다. '분석 시작' 버튼을 눌러주세요.")
+        else:
+            if 'current_news_idx' not in st.session_state or st.session_state.current_news_idx >= len(top_news_to_display):
+                st.session_state.current_news_idx = 0
+            
+            current_news_item = top_news_to_display[st.session_state.current_news_idx]
 
-        st.divider()
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("📈 위험도 등급별 뉴스 분포")
-            if st.session_state.news_data:
-                df = pd.DataFrame(st.session_state.news_data)
-                risk_counts = df['risk_level'].value_counts().reindex(['높음', '중간', '낮음'], fill_value=0)
-                
-                fig = px.bar(
-                    x=risk_counts.index, 
-                    y=risk_counts.values, 
-                    labels={'x': '위험도 등급', 'y': '뉴스 기사 수'},
-                    color=risk_counts.index,
-                    color_discrete_map={"높음": "#e74c3c", "중간": "#f39c12", "낮음": "#27ae60"}
-                )
-                fig.update_layout(height=400, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("분석된 뉴스가 없어 위험도 분포를 표시할 수 없습니다.")
-        with col2:
-            st.subheader("🎯 위험 키워드 분포")
-            if st.session_state.risk_keywords:
-                keywords_df = pd.DataFrame(st.session_state.risk_keywords)
-                keywords_df['risk_color'] = keywords_df['risk_level'].map({'높음': '#e74c3c', '중간': '#f39c12', '낮음': '#27ae60'})
-                
-                fig = go.Figure(data=[go.Pie(
-                    labels=keywords_df['keyword'], 
-                    values=keywords_df['frequency'], 
-                    hole=.5,
-                    marker=dict(colors=keywords_df['risk_color']),
-                    hovertemplate='<b>%{label}</b><br>빈도: %{value}<br>위험도: %{customdata}',
-                    customdata=keywords_df['risk_level']
-                )])
-                fig.update_layout(height=400, showlegend=True, margin=dict(t=0, b=0, l=0, r=0))
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("분석된 위험 키워드가 없습니다.")
+            article_summary = generate_article_summary(current_news_item['title'], current_news_item['full_content'])
+            
+            interest_class = "risk-high" if current_news_item["interest_level"] == "높음" else "risk-medium" if current_news_item["interest_level"] == "중간" else "risk-low"
+            st.markdown(f"""
+            <div class="news-item {interest_class}">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h5 style="margin: 0; color: #2c3e50;"><a href="{current_news_item['url']}" target="_blank">{current_news_item['title']}</a></h5>
+                        <span style="background: {'#e74c3c' if current_news_item['interest_level'] == '높음' else '#f39c12' if current_news_item['interest_level'] == '중간' else '#27ae60'}; color: white; padding: 0.3rem 0.8rem; border-radius: 15px; font-size: 0.8rem; font-weight: bold;">
+                            관심도: {current_news_item['interest_level']} ({current_news_item['interest_score']:.2f})
+                        </span>
+                </div>
+                <p style="color: #555; margin-bottom: 1rem; white-space: pre-wrap;">{article_summary}</p>
+                <div style="color: #888; font-size: 0.9rem;">
+                        <strong>키워드:</strong> {', '.join(current_news_item['keywords'])} | {current_news_item['published']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            col_prev, col_next = st.columns([1, 1])
+            with col_prev:
+                if st.button("< 이전", key='tab1_prev_btn', disabled=st.session_state.current_news_idx == 0):
+                    st.session_state.current_news_idx -= 1
+            with col_next:
+                if st.button("다음 >", key='tab1_next_btn', disabled=st.session_state.current_news_idx == len(top_news_to_display) - 1):
+                    st.session_state.current_news_idx += 1
 
 # --- 뉴스 분석 탭 ---
 with tab2:
@@ -392,8 +427,24 @@ with tab2:
     if 'analysis_started' not in st.session_state:
         st.info("👈 사이드바에서 '분석 시작' 버튼을 눌러주세요.")
     else:
+        interest_keywords = [kw.strip().lower() for kw in user_interest.split(',') if kw.strip()]
+        
+        sorted_news_data = sorted(
+            st.session_state.news_data,
+            key=lambda news: (
+                sum(1 for kw in interest_keywords if kw in news['title'].lower() or kw in news['full_content'].lower()),
+                news['interest_score']
+            ),
+            reverse=True
+        )
+
+        if interest_keywords:
+            st.info(f"입력하신 관심 키워드('{' '.join(interest_keywords)}')를 포함하는 뉴스가 우선적으로 정렬되었습니다.")
+        else:
+            st.info("현재는 전체 뉴스 기사를 관심도 점수 순으로 정렬했습니다. 관심 분야에 키워드를 입력하면 해당 뉴스가 우선적으로 표시됩니다.")
+
         page_size = 10
-        total_articles = len(st.session_state.news_data)
+        total_articles = len(sorted_news_data)
         total_pages = (total_articles - 1) // page_size + 1 if total_articles > 0 else 1
 
         if 'current_page' not in st.session_state:
@@ -401,7 +452,7 @@ with tab2:
         
         start_idx = (st.session_state.current_page - 1) * page_size
         end_idx = start_idx + page_size
-        paged_news_data = st.session_state.news_data[start_idx:end_idx]
+        paged_news_data = sorted_news_data[start_idx:end_idx]
         
         st.divider()
 
@@ -409,15 +460,14 @@ with tab2:
             st.info("선택한 필터에 해당하는 뉴스가 없습니다.")
         else:
             for news in paged_news_data:
-                risk_class = "risk-high" if news["risk_level"] == "높음" else "risk-medium" if news["risk_level"] == "중간" else "risk-low"
+                interest_class = "risk-high" if news["interest_level"] == "높음" else "risk-medium" if news["interest_level"] == "중간" else "risk-low"
                 
-                # 뉴스 제목에 하이퍼링크 추가
                 st.markdown(f"""
-                <div class="news-item {risk_class}">
+                <div class="news-item {interest_class}">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                         <h3 style="margin: 0; color: #2c3e50;"><a href="{news['url']}" target="_blank">{news['title']}</a></h3>
-                        <span style="background: {'#e74c3c' if news['risk_level'] == '높음' else '#f39c12' if news['risk_level'] == '중간' else '#27ae60'}; color: white; padding: 0.3rem 0.8rem; border-radius: 15px; font-size: 0.8rem; font-weight: bold;">
-                            위험도: {news['risk_level']} ({news['risk_score']:.2f})
+                        <span style="background: {'#e74c3c' if news['interest_level'] == '높음' else '#f39c12' if news['interest_level'] == '중간' else '#27ae60'}; color: white; padding: 0.3rem 0.8rem; border-radius: 15px; font-size: 0.8rem; font-weight: bold;">
+                            관심도: {news['interest_level']} ({news['interest_score']:.2f})
                         </span>
                     </div>
                     <p style="color: #555; margin-bottom: 1rem;">{news['summary']}</p>
@@ -434,45 +484,45 @@ with tab2:
                 
                 with st.expander("🔍 AI 분석 결과"):
                     st.markdown(f"""
-                    **위험 분석:**- 이 뉴스는 **{news['risk_level']} 위험**을 나타냅니다. (키워드 기반 분석)- 주요 위험 요소: {', '.join(news['keywords'][:2])}- 이 분석은 키워드 점수표를 기반으로 합니다.
+                    **관심 분석:**- 이 뉴스는 **{news['interest_level']} 관심**을 나타냅니다. (키워드 기반 분석)- 주요 키워드: {', '.join(news['keywords'][:2])}- 이 분석은 키워드 점수표를 기반으로 합니다.
                     """)
         
         st.divider()
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            if st.button("<< 처음"): st.session_state.current_page = 1
+            if st.button("<< 처음", key='tab2_first_btn'): st.session_state.current_page = 1
         with col2:
-            if st.button("< 이전", disabled=st.session_state.current_page == 1): st.session_state.current_page -= 1
+            if st.button("< 이전", key='tab2_prev_btn', disabled=st.session_state.current_page == 1): st.session_state.current_page -= 1
         with col4:
-            if st.button("다음 >", disabled=st.session_state.current_page == total_pages): st.session_state.current_page += 1
+            if st.button("다음 >", key='tab2_next_btn', disabled=st.session_state.current_page == total_pages): st.session_state.current_page += 1
         with col5:
-            if st.button("마지막 >>"): st.session_state.current_page = total_pages
+            if st.button("마지막 >>", key='tab2_last_btn'): st.session_state.current_page = total_pages
         with col3:
             st.markdown(f"<p style='text-align:center; font-weight:bold;'>{st.session_state.current_page} / {total_pages}</p>", unsafe_allow_html=True)
 
-# --- 위험 키워드 탭 ---
+# --- 관심 키워드 탭 ---
 with tab3:
-    st.header("🎯 AI 추출 위험 키워드")
+    st.header("🎯 AI 추출 관심 키워드")
     if 'analysis_started' not in st.session_state:
         st.info("👈 사이드바에서 '분석 시작' 버튼을 눌러주세요.")
     else:
         st.subheader("📊 실시간 통계")
         col1, col2 = st.columns(2)
-        high_risk_kw = sum(1 for kw in st.session_state.risk_keywords if kw['risk_level'] == '높음')
+        high_interest_kw = sum(1 for kw in st.session_state.risk_keywords if kw['interest_level'] == '높음')
         with col1:
             st.metric("총 추출 키워드", f"{len(st.session_state.risk_keywords)}개")
         with col2:
-            st.metric("고위험 키워드", f"{high_risk_kw}개")
+            st.metric("높은 관심도 키워드", f"{high_interest_kw}개")
         st.divider()
-        def get_risk_color(risk_level):
+        def get_interest_color(interest_level):
             colors = {"높음": "🔴", "중간": "🟡", "낮음": "🟢"}
-            return colors.get(risk_level, "⚪")
-        st.subheader("🔍 추출된 위험 키워드")
+            return colors.get(interest_level, "⚪")
+        st.subheader("🔍 추출된 관심 키워드")
         for idx, kw in enumerate(st.session_state.risk_keywords):
             col1, col2, col3 = st.columns([3, 1, 1])
-            with col1: st.markdown(f"**{kw['keyword']}** {get_risk_color(kw['risk_level'])}")
+            with col1: st.markdown(f"**{kw['keyword']}** {get_interest_color(kw['interest_level'])}")
             with col2: st.markdown(f"빈도: **{kw['frequency']}**")
-            with col3: st.markdown(f"위험도: **{kw['risk_level']}**")
+            with col3: st.markdown(f"관심도: **{kw['interest_level']}**")
 
 # --- 대응 플레이북 탭 ---
 with tab4:
@@ -494,9 +544,9 @@ with tab5:
             "keywords": st.session_state.risk_keywords,
             "playbook": st.session_state.playbook_content
         }
-        pdf_output = create_pdf_report(report_data)
-        st.download_button(label="📄 PDF 보고서 다운로드", data=pdf_output, file_name=f"보안_위험_분석_보고서_{company_name}.pdf", mime="application/pdf")
+        pdf_output = create_pdf_report(report_data, company_name)
+        st.download_button(label="📄 PDF 보고서 다운로드", data=pdf_output, file_name=f"보안_관심도_분석_보고서_{company_name}.pdf", mime="application/pdf")
 
 # 하단 정보
 st.divider()
-st.markdown("""<div style="text-align: center; color: #888; padding: 2rem;"><p>🛡️ SecureWatch - 중소기업 보안 위험 분석 시스템</p><p>AI 기반 실시간 보안 위협 분석 및 대응 방안 제공 | Made by 팔색조</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div style="text-align: center; color: #888; padding: 2rem;"><p>🛡️ SecureWatch - 중소기업 보안 관심도 분석 시스템</p><p>AI 기반 실시간 보안 위협 분석 및 맞춤형 대응 방안 제공 | Made by 팔색조</p></div>""", unsafe_allow_html=True)
