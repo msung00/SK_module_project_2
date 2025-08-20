@@ -5,6 +5,7 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)
 ![Gemini](https://img.shields.io/badge/Gemini-API-orange.svg)
 ![KoELECTRA](https://img.shields.io/badge/KoELECTRA-NLP-green.svg)
+![SQLite](https://img.shields.io/badge/SQLite-Database-blue.svg)
 
 ---
 
@@ -13,6 +14,7 @@
 > **중소기업 맞춤형 보안 위험 분석 플랫폼**  
 > 최신 보안 뉴스를 자동으로 수집·분석하고, 머신러닝/딥러닝 기반으로 **위험 키워드 추출** 후  
 > Google **Gemini API**가 대응 권고사항을 생성하여 **PDF 플레이북**으로 제공합니다.  
+> SQLite DB를 이용하여 **뉴스 및 플레이북 즐겨찾기 기능**까지 지원합니다.  
 
 ---
 
@@ -24,6 +26,7 @@
 - 🤖 **Gemini LLM 권고 생성**: 기업 환경 맞춤 대응책 자동 작성
 - 📑 **리포트 출력**: PDF / Markdown 형태 보고서 다운로드
 - 🌐 **Streamlit UI**: 원클릭 실행 및 대시보드 제공
+- ⭐ **즐겨찾기 기능**: SQLite DB를 활용해 **뉴스 / 플레이북 저장 & 관리**
 
 ---
 
@@ -33,6 +36,7 @@
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Pandas](https://img.shields.io/badge/Pandas-150458?style=for-the-badge&logo=pandas&logoColor=white)
 ![NumPy](https://img.shields.io/badge/NumPy-013243?style=for-the-badge&logo=numpy&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
 ![Scikit-learn](https://img.shields.io/badge/Scikit--learn-F7931E?style=for-the-badge&logo=scikit-learn&logoColor=white)
 
 ### AI & ML
@@ -51,29 +55,34 @@
 ![Notion](https://img.shields.io/badge/Notion-000000?style=for-the-badge&logo=notion&logoColor=white)
 
 ---
+
 ## 📋 시스템 요구사항
 
-Python 3.10+
-
-Google Gemini API Key
-
-## 실행 방법
-pip install streamlit pandas plotly requests beautifulsoup4 fpdf konlpy torch transformers google-generativeai python-dotenv
-
-## 📖 사용 흐름
-
-1️⃣ **뉴스 수집** → 최신 보안 기사 가져오기  
-2️⃣ **전처리** → HTML/특수문자 제거 & 형태소 분석  
-3️⃣ **위험 키워드 분석** → ML/DL 기반 키워드 추출  
-4️⃣ **Gemini API** → 대응 권고사항 생성  
-5️⃣ **PDF/Markdown 출력** → 플레이북 다운로드  
+- Python 3.10+
+- Google Gemini API Key
+- SQLite (내장 DB 사용)
 
 ---
 
+## 🚀 실행 방법
+
+```bash
+# 필수 라이브러리 설치
+pip install streamlit pandas plotly requests beautifulsoup4 fpdf konlpy torch transformers google-generativeai python-dotenv
+```
+
+## 📖 사용 흐름
+
+1️⃣ 뉴스 수집 → 최신 보안 기사 가져오기  
+2️⃣ 전처리 → HTML/특수문자 제거 & 형태소 분석  
+3️⃣ 위험 키워드 분석 → ML/DL 기반 키워드 추출  
+4️⃣ Gemini API → 대응 권고사항 생성  
+5️⃣ PDF 출력 → 플레이북 다운로드  
+6️⃣ 즐겨찾기 저장 → SQLite DB에 뉴스 & 플레이북 관리  
+
 <div align="center">
 
-⚡ **SME Threat Watch — 중소기업 보안 대응을 더 빠르고 더 스마트하게** ⚡  
+⚡ SME Threat Watch — 중소기업 보안 대응을 더 빠르고 더 스마트하게 ⚡
 Made by SK Shieldus Rookies 26기 AI 8조 팔색조
 
 </div>
-
