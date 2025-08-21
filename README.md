@@ -95,7 +95,7 @@ GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
 애플리케이션 실행
 Streamlit을 사용하여 웹 애플리케이션을 실행합니다.
 
-streamlit run Interface.py
+streamlit run main.py
 ```
 
 ## 📖 사용 흐름
