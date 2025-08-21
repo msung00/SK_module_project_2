@@ -73,6 +73,24 @@ CSS_STYLES = """
     .risk-high { border-left-color: #e74c3c !important; }
     .risk-medium { border-left-color: #f39c12 !important; }
     .risk-low { border-left-color: #27ae60 !important; }
+    .welcome-box {
+        background: linear-gradient(45deg, #f0f8ff, #e6e6fa);
+        padding: 2rem;
+        border-radius: 15px;
+        margin: 2rem auto;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        border: 2px solid #6a5acd;
+        text-align: center;
+        animation: fade-in 1s ease-in-out;
+    }
+    .welcome-box h3, .welcome-box h4 {
+        color: #483d8b;
+        text-shadow: 1px 1px 2px rgba(106, 90, 205, 0.5);
+    }
+    @keyframes fade-in {
+        from { opacity: 0; transform: translateY(-20px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
 </style>
 """
 
