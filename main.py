@@ -7,7 +7,7 @@ from datetime import datetime
 from config import *
 from news_scraper import fetch_latest_news_by_rss
 from ner_analyzer import load_ner_model, update_keywords_from_cisa, analyze_risk_with_model, industry_risk_map
-from llm_generator import generate_playbook_with_llm
+from llm_generator import generate_playbook_with_llm, fetch_headlines_for_summary, generate_dashboard_summary
 from pdf_reporter import create_pdf_report
 from database import *
 
@@ -56,6 +56,7 @@ def main():
         st.session_state.playbook_content = ""
         st.session_state.report_summary = ""
         st.session_state.llm_selected_keywords = []
+        st.session_state.dashboard_summary = ""
         
         # 사이드바 위젯의 초기값을 세션 상태에 저장
         st.session_state.company_name = "중소기업"
@@ -104,16 +105,16 @@ def render_sidebar():
         st.subheader("🏢 기업 정보 설정")
         st.session_state.company_name = st.text_input("기업명", value=st.session_state.company_name, key='sidebar_company_name')
         st.session_state.company_size = st.selectbox("기업 규모", COMPANY_SIZE_OPTIONS,
-                                                     index=COMPANY_SIZE_OPTIONS.index(st.session_state.company_size),
-                                                     key='sidebar_company_size_select')
+                                                      index=COMPANY_SIZE_OPTIONS.index(st.session_state.company_size),
+                                                      key='sidebar_company_size_select')
         st.session_state.industry_type = st.selectbox("업종", INDUSTRY_OPTIONS,
-                                                      index=INDUSTRY_OPTIONS.index(st.session_state.industry_type),
-                                                      key='sidebar_industry_type_select')
+                                                       index=INDUSTRY_OPTIONS.index(st.session_state.industry_type),
+                                                       key='sidebar_industry_type_select')
         
         st.subheader("🌐 인프라 및 제약사항")
         st.session_state.infrastructure = st.selectbox("인프라 환경", INFRASTRUCTURE_OPTIONS,
-                                                       index=INFRASTRUCTURE_OPTIONS.index(st.session_state.infrastructure),
-                                                       key='sidebar_infrastructure_select')
+                                                            index=INFRASTRUCTURE_OPTIONS.index(st.session_state.infrastructure),
+                                                            key='sidebar_infrastructure_select')
         st.session_state.constraints = st.text_area("보안 정책/예산 등 제한사항", value=st.session_state.constraints, key='sidebar_constraints')
         st.session_state.user_interest = st.text_area("관심 분야 키워드(쉼표 구분)", value=st.session_state.user_interest, key='sidebar_user_interest')
         
@@ -226,6 +227,23 @@ def start_analysis():
                 st.session_state.playbook_content = "플레이북 생성에 실패했습니다."
                 st.session_state.llm_selected_keywords = []
 
+    with st.spinner("대시보드 요약 생성 중..."):
+        dashboard_rss_url = "http://www.boannews.com/media/news_rss.xml?skind=5"
+        headlines = fetch_headlines_for_summary(dashboard_rss_url)
+        if headlines:
+            company_info = {"name": st.session_state.company_name, "size": st.session_state.company_size, "industry": st.session_state.industry_type}
+            summary_text = generate_dashboard_summary(
+                headlines,
+                company_info,
+                st.session_state.infrastructure,
+                st.session_state.constraints,
+                gemini_model
+            )
+            st.session_state.dashboard_summary = summary_text
+        else:
+            st.session_state.dashboard_summary = "최신 보안 동향 요약 정보를 가져오는 데 실패했습니다."
+
+
     st.session_state.report_summary = f"총 {len(st.session_state.news_data)}개 뉴스 분석 완료."
     st.success("✅ 분석 완료! 아래 탭에서 결과를 확인하세요.")
     st.rerun()
@@ -255,15 +273,23 @@ def render_tabs():
 def render_dashboard():
     """대시보드 탭 렌더링"""
     if not st.session_state.analysis_started:
-        pass
+        st.info("👈 사이드바에서 기업 정보를 설정하고 '분석 시작'을 눌러주세요.")
     else:
         st.markdown(f"""
         <div class="welcome-box">
-            <h3 style='margin: 0;'>어서오세요 {st.session_state.company_name}님,</h3>
-            <h4 style='margin: 10px 0 0;'>오늘의 이슈는 다음과 같습니다.</h4>
+            <h3 style='margin: 0;'>{st.session_state.company_name}님, 환영합니다.</h3>
+            <h4 style='margin: 10px 0 0;'>AI가 분석한 최신 보안 동향 및 권장 조치는 다음과 같습니다.</h4>
         </div>
         """, unsafe_allow_html=True)
-    
+        
+        if st.session_state.dashboard_summary:
+            st.markdown(f"""
+            <div class="summary-box">
+                <h4>📈 오늘의 보안 동향 요약 및 권장 조치</h4>
+                <p>{st.session_state.dashboard_summary}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
 def render_news_analysis():
     """뉴스 분석 탭 렌더링 (상·중·하 2개씩 3열, 카드 높이 고정 + 줄 제한)"""
     st.header("📰 최신 보안 뉴스 분석")
@@ -338,6 +364,7 @@ def render_news_analysis():
     for n in high: render_news_card(n, col_high)
     for n in medium: render_news_card(n, col_medium)
     for n in low: render_news_card(n, col_low)
+    
 def render_playbook():
     """대응 플레이북 탭 렌더링"""
     if not st.session_state.analysis_started:
@@ -405,6 +432,7 @@ def render_favorites():
                     st.markdown(f"**주요 키워드:** {', '.join(json.loads(kws))}")
                     if st.button("❌ 삭제", key=f"delete_pb_btn_{pb_id}"):
                         delete_playbook_from_favorites(pb_id)
+                        st.rerun()
         else:
             st.info("저장된 플레이북이 없습니다.")
 
@@ -414,7 +442,7 @@ def render_favorites():
             for news in saved_news:
                 news_id, title, url, summary, kws, risk_level, risk_score, saved_at = news
                 st.markdown(f"""
-                    <div class="news-item risk-{risk_level.lower()}">
+                    <div class="news-item risk-{risk_level.lower() if risk_level else 'low'}">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
                             <h5 style="margin:0;color:#2c3e50;">
                                 <a href="{url}" target="_blank">{title}</a>
@@ -427,15 +455,11 @@ def render_favorites():
                         <div style="color:#888; font-size:0.9rem;">
                             <strong>키워드:</strong> {', '.join(json.loads(kws))} | 저장일: {saved_at.split(' ')[0]}
                         </div>
-                        <div style="text-align:right; margin-top:1rem;">
-                            <a href="?delete_news_id={news_id}" target="_self" style="
-                                background: #e74c3c; color: white; border: none; border-radius: 5px;
-                                padding: 0.5rem 1rem; font-weight: 600; cursor: pointer;
-                                text-decoration: none; display: inline-block;
-                            ">❌ 삭제</a>
-                        </div>
                     </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
+                if st.button("❌ 삭제", key=f"delete_news_fav_btn_{news_id}"):
+                    delete_news_from_favorites(news_id)
+                    st.rerun()
         else:
             st.info("저장된 뉴스 기사가 없습니다.")
             

@@ -1,6 +1,58 @@
 import json
 import re
 import google.generativeai as genai
+import feedparser
+
+def fetch_headlines_for_summary(rss_url: str, limit: int = 15):
+    """지정된 RSS URL에서 최신 뉴스 헤드라인 목록을 가져옵니다."""
+    try:
+        feed = feedparser.parse(rss_url)
+        # entry의 title 속성이 없는 경우를 대비하여 방어적으로 코딩
+        headlines = [
+            getattr(entry, 'title', '제목 없음')
+            for entry in getattr(feed, 'entries', [])
+            if hasattr(entry, 'title')
+        ]
+        return headlines[:limit]
+    except Exception as e:
+        print(f"RSS 피드 로딩 실패: {e}")
+        return []
+
+def generate_dashboard_summary(headlines: list, company_info: dict, infrastructure: str, constraints: str, gemini_model):
+    """헤드라인과 기업 정보를 바탕으로 대시보드용 요약 및 권장 조치를 생성합니다."""
+    if not headlines:
+        return "최신 보안 뉴스를 가져오는 데 실패했습니다."
+
+    company_info_str = json.dumps(company_info, ensure_ascii=False)
+    headlines_str = "\n".join(f"- {h}" for h in headlines)
+
+    prompt = f"""
+당신은 중소기업을 위한 AI 보안 어드바이저입니다. 아래 제공된 최신 보안 뉴스 헤드라인 목록과 회사 프로필을 바탕으로, 이 회사가 **즉시 주목해야 할 보안 위협과 대응 방향**을 **정확히 3문장**으로 요약하세요.
+
+**[분석 원칙]**
+- 첫 문장은 현재 가장 중요한 위협 동향을 언급합니다.
+- 두 번째 문장은 이 위협이 회사에 미칠 수 있는 구체적인 영향을 설명합니다.
+- 세 번째 문장은 회사가 즉시 시작해야 할 가장 우선순위 높은 대응 조치 1~2가지를 제시합니다.
+- 추상적인 표현 대신 구체적인 행동을 권고하세요.
+
+**[최신 보안 뉴스 헤드라인 목록]**
+{headlines_str}
+
+**[회사 프로필]**
+- 회사 정보: {company_info_str}
+- 인프라 환경: {infrastructure}
+- 제약사항 및 정책: {constraints if constraints else "특별한 제약사항 없음"}
+
+**[출력]**
+위 내용을 종합하여 3문장으로 요약된 최종 결과만 한국어로 출력하세요. 다른 설명은 절대 추가하지 마세요.
+""".strip()
+
+    try:
+        res = gemini_model.generate_content(prompt)
+        return res.text
+    except Exception as e:
+        print(f"대시보드 요약 생성 실패: {e}")
+        return "AI 기반 보안 동향 요약 생성에 실패했습니다. API 상태를 확인해주세요."
 
 def generate_article_summary(title: str, content: str, severity_label: str, company_info: dict, infrastructure: str, gemini_model):
     """

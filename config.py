@@ -87,6 +87,23 @@ CSS_STYLES = """
         color: #483d8b;
         text-shadow: 1px 1px 2px rgba(106, 90, 205, 0.5);
     }
+    .summary-box {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        margin: 2rem auto;
+        border-left: 5px solid #6a5acd;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    }
+    .summary-box h4 {
+        color: #483d8b;
+        margin-bottom: 1rem;
+    }
+    /* 이 부분이 추가되었습니다 */
+    .summary-box p {
+        font-size: 1.15em;
+        line-height: 1.6;
+    }
     @keyframes fade-in {
         from { opacity: 0; transform: translateY(-20px); }
         to   { opacity: 1; transform: translateY(0); }
