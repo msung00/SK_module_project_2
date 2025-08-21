@@ -177,51 +177,8 @@ def start_analysis():
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg or "quota" in error_msg.lower():
-                st.error("⚠️ Gemini API 할당량이 초과되었습니다. 다음 중 하나를 시도해주세요:")
-                st.markdown("""
-                1. **잠시 후 재시도** (약 1시간 후)
-                2. **새로운 API 키 생성** (Google AI Studio에서)
-                3. **유료 플랜으로 업그레이드**
-                
-                현재는 기본 템플릿으로 플레이북을 생성합니다.
-                """)
-                
-                basic_playbook = f"""
-# {st.session_state.industry_type} 업종 보안 대응 플레이북
-
-## 주요 위협 키워드
-{', '.join(keywords_list[:10])}
-
-## 기본 보안 대응 방안
-1. **네트워크 보안**
-    - 방화벽 설정 강화
-    - VPN 접속 관리
-    - 네트워크 모니터링
-
-2. **엔드포인트 보안**
-    - 안티바이러스 업데이트
-    - OS 보안 패치 적용
-    - USB 장치 사용 제한
-
-3. **사용자 교육**
-    - 피싱 메일 인식 교육
-    - 비밀번호 정책 준수
-    - 소셜 엔지니어링 방지
-
-4. **데이터 보호**
-    - 중요 데이터 암호화
-    - 정기 백업 수행
-    - 접근 권한 관리
-
-## 인프라별 특화 방안
-**{st.session_state.infrastructure}** 환경에 맞는 추가 보안 설정을 적용하세요.
-
-## 제약사항 고려사항
-{st.session_state.constraints if st.session_state.constraints else "특별한 제약사항 없음"}
-                """
-                
-                st.session_state.playbook_content = basic_playbook
-                st.session_state.llm_selected_keywords = [{"keyword": kw, "reason": "기본 템플릿"} for kw in keywords_list[:5]]
+                st.error("⚠️ Gemini API 할당량이 초과되었습니다.")
+                st.info("기본 템플릿으로 플레이북을 생성합니다.")
             else:
                 st.error(f"플레이북 생성 중 오류가 발생했습니다: {error_msg}")
                 st.session_state.playbook_content = "플레이북 생성에 실패했습니다."
@@ -243,7 +200,6 @@ def start_analysis():
         else:
             st.session_state.dashboard_summary = "최신 보안 동향 요약 정보를 가져오는 데 실패했습니다."
 
-
     st.session_state.report_summary = f"총 {len(st.session_state.news_data)}개 뉴스 분석 완료."
     st.success("✅ 분석 완료! 아래 탭에서 결과를 확인하세요.")
     st.rerun()
@@ -254,19 +210,12 @@ def render_tabs():
         "📊 대시보드", "📰 뉴스 분석", "📋 대응 플레이북", "⭐ 즐겨찾기"
     ])
     
-    # 대시보드 탭
     with tab1:
         render_dashboard()
-    
-    # 뉴스 분석 탭
     with tab2:
         render_news_analysis()
-    
-    # 대응 플레이북 탭
     with tab3:
         render_playbook()
-    
-    # 즐겨찾기 탭
     with tab4:
         render_favorites()
 
@@ -290,81 +239,97 @@ def render_dashboard():
             </div>
             """, unsafe_allow_html=True)
 
+# --- 이 함수가 전체적으로 수정되었습니다 ---
 def render_news_analysis():
-    """뉴스 분석 탭 렌더링 (상·중·하 2개씩 3열, 카드 높이 고정 + 줄 제한)"""
+    """뉴스 분석 탭 렌더링 (안정적인 3열 카드 레이아웃)"""
     st.header("📰 최신 보안 뉴스 분석")
     if not st.session_state.analysis_started:
         st.info("👈 사이드바에서 기업 정보를 설정하고 '분석 시작'을 눌러주세요.")
         return
 
-    news_data = st.session_state.news_data
-
-    # 위험도별 그룹핑
-    high = [n for n in news_data if n["risk_level"] == "높음"][:2]
-    medium = [n for n in news_data if n["risk_level"] == "중간"][:2]
-    low = [n for n in news_data if n["risk_level"] == "낮음"][:2]
-
-    # 3열 레이아웃
-    col_high, col_medium, col_low = st.columns(3)
-
-    # CSS 스타일: 카드 높이 고정 + 줄 제한
+    # 카드 UI를 위한 CSS 스타일 정의
     st.markdown("""
     <style>
-    .news-item {
-        height: 260px;              /* 카드 높이 고정 */
-        overflow: hidden;
+    .news-card-wrapper {
         padding: 1rem;
         border-radius: 12px;
-        background: #fff;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-        margin-bottom: 1rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        margin-bottom: 1.5rem;
+        height: 320px; 
         display: flex;
         flex-direction: column;
         justify-content: space-between;
+        border-left: 5px solid #ccc;
     }
-    .news-item h5 {
-        font-size: 1rem;
-        margin-bottom: 0.5rem;
-        line-height: 1.3;
+    .news-card-content h5 { font-size: 1rem; margin-bottom: 0.5rem; line-height: 1.3; }
+    .news-card-content h5 a { text-decoration: none; color: inherit; }
+    .news-card-content p {
+        font-size: 0.9rem; color: #555; line-height: 1.4;
+        display: -webkit-box; -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;
+        margin-top: 0.5rem;
     }
-    .news-item p {
-        font-size: 0.9rem;
-        color: #555;
-        line-height: 1.4;
-        display: -webkit-box;
-        -webkit-line-clamp: 4;      /* 최대 4줄까지만 보이도록 */
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-        text-overflow: ellipsis;
+    .news-card-footer .keywords { color:#888; font-size:0.8rem; }
+    
+    /* --- 이 부분이 수정되었습니다 (위험도별 배경색 및 테두리 색상) --- */
+    .risk-high { 
+        border-left-color: #e74c3c;
+        background-color: #fff5f5;
+    }
+    .risk-medium { 
+        border-left-color: #f39c12;
+        background-color: #fff8f0;
+    }
+    .risk-low { 
+        border-left-color: #27ae60;
+        background-color: #f6fcf6;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    def render_news_card(news, container):
-        css_class = "risk-high" if news["risk_level"] == "높음" \
-            else "risk-medium" if news["risk_level"] == "중간" else "risk-low"
+    news_data = st.session_state.news_data
+    high_news = [n for n in news_data if n["risk_level"] == "높음"][:2]
+    medium_news = [n for n in news_data if n["risk_level"] == "중간"][:2]
+    low_news = [n for n in news_data if n["risk_level"] == "낮음"][:2]
 
-        with container:
-            st.markdown(f"""
-            <div class="news-item {css_class}">
-                <h5>
-                    <a href="{news['url']}" target="_blank">{news['title']}</a>
-                </h5>
-                <span style="background:{'#e74c3c' if news['risk_level']=='높음' else '#f39c12' if news['risk_level']=='중간' else '#27ae60'};color:white;padding:0.2rem 0.6rem;border-radius:10px;font-size:0.8rem;font-weight:bold;">
-                    관심도: {news['risk_level']} ({news['risk_score']:.2f})
-                </span>
-                <p>{news['summary']}</p>
-                <div style="color:#888; font-size:0.8rem;">
-                    <strong>키워드:</strong> {', '.join(news['keywords'])}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    col1, col2, col3 = st.columns(3)
 
-    # 각 열에 기사 렌더링
-    for n in high: render_news_card(n, col_high)
-    for n in medium: render_news_card(n, col_medium)
-    for n in low: render_news_card(n, col_low)
-    
+    def display_news_in_column(column, news_list, risk_level_str, risk_level_emoji, risk_level_color, key_prefix):
+        with column:
+            # --- 이 부분이 수정되었습니다 (이모지만 사용) ---
+            st.subheader(f"{risk_level_emoji} {risk_level_str}")
+            if not news_list:
+                st.info("관련 뉴스가 없습니다.")
+            for i, news in enumerate(news_list):
+                with st.container():
+                    risk_css_class = f"risk-{key_prefix}" # high, medium, low
+                    st.markdown(f"""
+                    <div class="news-card-wrapper {risk_css_class}">
+                        <div class="news-card-content">
+                            <h5><a href="{news['url']}" target="_blank">{news['title']}</a></h5>
+                            <span style="background:{risk_level_color};color:white;padding:0.2rem 0.6rem;border-radius:10px;font-size:0.8rem;font-weight:bold;">
+                                관심도: {news['risk_level']} ({news['risk_score']:.2f})
+                            </span>
+                            <p>{news['summary']}</p>
+                        </div>
+                        <div class="news-card-footer">
+                            <div class="keywords"><strong>키워드:</strong> {', '.join(news['keywords'])}</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if st.button("💾 즐겨찾기 추가", key=f"save_{key_prefix}_{i}", use_container_width=True):
+                        success, message = save_news_to_favorites(news)
+                        if success:
+                            st.toast(f"✅ '{news['title'][:20]}...' 저장 완료!")
+                        else:
+                            st.toast(f"⚠️ {message}")
+
+    display_news_in_column(col1, high_news, "높음", "🔴", "#e74c3c", "high")
+    display_news_in_column(col2, medium_news, "중간", "🟠", "#f39c12", "medium")
+    display_news_in_column(col3, low_news, "낮음", "🟢", "#27ae60", "low")
+
+
 def render_playbook():
     """대응 플레이북 탭 렌더링"""
     if not st.session_state.analysis_started:
@@ -418,7 +383,7 @@ def render_favorites():
     saved_playbooks = get_saved_playbooks()
 
     if not saved_news and not saved_playbooks:
-        st.info("저장된 기사나 플레이북이 없습니다. '뉴스 분석' 탭에서 기사를, '대응 플레이북' 탭에서 플레이북을 저장할 수 있습니다.")
+        st.info("저장된 기사나 플레이북이 없습니다.")
     else:
         st.subheader("저장된 플레이북")
         if saved_playbooks:
