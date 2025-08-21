@@ -83,7 +83,7 @@ cd [프로젝트 폴더명]
 ```bash
 필수 라이브러리 설치
 
-pip install streamlit pandas numpy requests beautifulsoup4 fpdf konlpy torch transformers google-generativeai python-dotenv
+pip install streamlit pandas numpy requests beautifulsoup4 fpdf konlpy torch transformers google-generativeai python-dotenv feedparser
 ```
 ```bash
 .env 파일 설정
