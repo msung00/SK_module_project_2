@@ -11,44 +11,25 @@ from llm_generator import generate_playbook_with_llm, fetch_headlines_for_summar
 from pdf_reporter import create_pdf_report
 from database import *
 
-# ============================================================
-# 메인 애플리케이션
-# ============================================================
-
-# 전역 변수로 NER 모델과 Gemini 모델 선언
-ner_tokenizer = None
-ner_model = None
-ner_ctx = None
-gemini_model = None
+# =... (main, render_sidebar, start_analysis, render_tabs, render_dashboard 함수는 이전과 동일) ...
 
 def main():
     global ner_tokenizer, ner_model, ner_ctx, gemini_model
-    # 페이지 설정
     st.set_page_config(**PAGE_CONFIG)
-    
-    # CSS 스타일 적용
     st.markdown(CSS_STYLES, unsafe_allow_html=True)
     
-    # 환경 변수 검증
     if not GEMINI_API_KEY:
         st.error("Gemini API 키가 설정되지 않았습니다. .env 파일을 확인해주세요.")
         st.stop()
     
-    # Gemini 모델 초기화
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel('gemini-1.5-flash', generation_config=GENERATION_CONFIG)
     
-    # NER 모델 로딩
     ner_tokenizer, ner_model, ner_ctx = load_ner_model()
-    
-    # CISA KEV 업데이트 (앱 최초 1회)
     update_keywords_from_cisa(industry_risk_map)
-    
-    # 데이터베이스 초기화
     init_db()
     
-    # 세션 상태를 초기화
     if 'analysis_started' not in st.session_state:
         st.session_state.analysis_started = False
         st.session_state.news_data = []
@@ -57,8 +38,6 @@ def main():
         st.session_state.report_summary = ""
         st.session_state.llm_selected_keywords = []
         st.session_state.dashboard_summary = ""
-        
-        # 사이드바 위젯의 초기값을 세션 상태에 저장
         st.session_state.company_name = "중소기업"
         st.session_state.company_size = COMPANY_SIZE_OPTIONS[0]
         st.session_state.industry_type = INDUSTRY_OPTIONS[0]
@@ -67,7 +46,6 @@ def main():
         st.session_state.user_interest = ""
         st.session_state.current_page = 1
 
-    # 삭제 요청 처리 (쿼리 파라미터 기반)
     query_params = st.query_params
     if "delete_news_id" in query_params:
         delete_news_from_favorites(query_params["delete_news_id"])
@@ -78,10 +56,8 @@ def main():
         del st.query_params["delete_playbook_id"]
         st.rerun()
 
-    # 사이드바 렌더링
     render_sidebar()
     
-    # 메인 헤더
     st.markdown("""
     <div class="main-header">
         <h1>🛡️ 중소기업 보안 관심/위험 분석 시스템</h1>
@@ -89,11 +65,9 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # 탭 렌더링
     render_tabs()
 
 def render_sidebar():
-    """사이드바 렌더링"""
     with st.sidebar:
         st.markdown("""
         <div class="sidebar-logo">
@@ -104,17 +78,11 @@ def render_sidebar():
         
         st.subheader("🏢 기업 정보 설정")
         st.session_state.company_name = st.text_input("기업명", value=st.session_state.company_name, key='sidebar_company_name')
-        st.session_state.company_size = st.selectbox("기업 규모", COMPANY_SIZE_OPTIONS,
-                                                      index=COMPANY_SIZE_OPTIONS.index(st.session_state.company_size),
-                                                      key='sidebar_company_size_select')
-        st.session_state.industry_type = st.selectbox("업종", INDUSTRY_OPTIONS,
-                                                       index=INDUSTRY_OPTIONS.index(st.session_state.industry_type),
-                                                       key='sidebar_industry_type_select')
+        st.session_state.company_size = st.selectbox("기업 규모", COMPANY_SIZE_OPTIONS, index=COMPANY_SIZE_OPTIONS.index(st.session_state.company_size), key='sidebar_company_size_select')
+        st.session_state.industry_type = st.selectbox("업종", INDUSTRY_OPTIONS, index=INDUSTRY_OPTIONS.index(st.session_state.industry_type), key='sidebar_industry_type_select')
         
         st.subheader("🌐 인프라 및 제약사항")
-        st.session_state.infrastructure = st.selectbox("인프라 환경", INFRASTRUCTURE_OPTIONS,
-                                                            index=INFRASTRUCTURE_OPTIONS.index(st.session_state.infrastructure),
-                                                            key='sidebar_infrastructure_select')
+        st.session_state.infrastructure = st.selectbox("인프라 환경", INFRASTRUCTURE_OPTIONS, index=INFRASTRUCTURE_OPTIONS.index(st.session_state.infrastructure), key='sidebar_infrastructure_select')
         st.session_state.constraints = st.text_area("보안 정책/예산 등 제한사항", value=st.session_state.constraints, key='sidebar_constraints')
         st.session_state.user_interest = st.text_area("관심 분야 키워드(쉼표 구분)", value=st.session_state.user_interest, key='sidebar_user_interest')
         
@@ -123,7 +91,6 @@ def render_sidebar():
             start_analysis()
 
 def start_analysis():
-    """분석 시작 및 실행"""
     global ner_tokenizer, ner_model, ner_ctx, gemini_model
     
     st.session_state.analysis_started = True
@@ -190,11 +157,7 @@ def start_analysis():
         if headlines:
             company_info = {"name": st.session_state.company_name, "size": st.session_state.company_size, "industry": st.session_state.industry_type}
             summary_text = generate_dashboard_summary(
-                headlines,
-                company_info,
-                st.session_state.infrastructure,
-                st.session_state.constraints,
-                gemini_model
+                headlines, company_info, st.session_state.infrastructure, st.session_state.constraints, gemini_model
             )
             st.session_state.dashboard_summary = summary_text
         else:
@@ -205,22 +168,13 @@ def start_analysis():
     st.rerun()
 
 def render_tabs():
-    """탭 렌더링"""
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 대시보드", "📰 뉴스 분석", "📋 대응 플레이북", "⭐ 즐겨찾기"
-    ])
-    
-    with tab1:
-        render_dashboard()
-    with tab2:
-        render_news_analysis()
-    with tab3:
-        render_playbook()
-    with tab4:
-        render_favorites()
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 대시보드", "📰 뉴스 분석", "📋 대응 플레이북", "⭐ 즐겨찾기"])
+    with tab1: render_dashboard()
+    with tab2: render_news_analysis()
+    with tab3: render_playbook()
+    with tab4: render_favorites()
 
 def render_dashboard():
-    """대시보드 탭 렌더링"""
     if not st.session_state.analysis_started:
         st.info("👈 사이드바에서 기업 정보를 설정하고 '분석 시작'을 눌러주세요.")
     else:
@@ -230,7 +184,6 @@ def render_dashboard():
             <h4 style='margin: 10px 0 0;'>AI가 분석한 최신 보안 동향 및 권장 조치는 다음과 같습니다.</h4>
         </div>
         """, unsafe_allow_html=True)
-        
         if st.session_state.dashboard_summary:
             st.markdown(f"""
             <div class="summary-box">
@@ -254,24 +207,27 @@ def render_news_analysis():
         padding: 1rem;
         border-radius: 12px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        margin-bottom: 1.5rem;
-        height: 320px; 
+        /* --- 이 부분이 수정되었습니다 --- */
+        margin-bottom: 0.5rem; /* 버튼과의 간격을 줄임 */
+        height: 300px; /* 카드 높이를 소폭 줄임 */
         display: flex;
         flex-direction: column;
-        justify-content: space-between;
+        /* justify-content: space-between; <- 이 속성을 제거하여 내용을 위로 정렬 */
         border-left: 5px solid #ccc;
+    }
+    .news-card-content {
+        flex-grow: 1; /* 내용이 남는 공간을 채우도록 설정 */
     }
     .news-card-content h5 { font-size: 1rem; margin-bottom: 0.5rem; line-height: 1.3; }
     .news-card-content h5 a { text-decoration: none; color: inherit; }
     .news-card-content p {
         font-size: 0.9rem; color: #555; line-height: 1.4;
-        display: -webkit-box; -webkit-line-clamp: 3;
+        display: -webkit-box; -webkit-line-clamp: 4; /* p태그는 4줄로 늘림 */
         -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;
         margin-top: 0.5rem;
     }
     .news-card-footer .keywords { color:#888; font-size:0.8rem; }
     
-    /* --- 이 부분이 수정되었습니다 (위험도별 배경색 및 테두리 색상) --- */
     .risk-high { 
         border-left-color: #e74c3c;
         background-color: #fff5f5;
@@ -296,13 +252,12 @@ def render_news_analysis():
 
     def display_news_in_column(column, news_list, risk_level_str, risk_level_emoji, risk_level_color, key_prefix):
         with column:
-            # --- 이 부분이 수정되었습니다 (이모지만 사용) ---
             st.subheader(f"{risk_level_emoji} {risk_level_str}")
             if not news_list:
                 st.info("관련 뉴스가 없습니다.")
             for i, news in enumerate(news_list):
                 with st.container():
-                    risk_css_class = f"risk-{key_prefix}" # high, medium, low
+                    risk_css_class = f"risk-{key_prefix}"
                     st.markdown(f"""
                     <div class="news-card-wrapper {risk_css_class}">
                         <div class="news-card-content">
@@ -329,9 +284,7 @@ def render_news_analysis():
     display_news_in_column(col2, medium_news, "중간", "🟠", "#f39c12", "medium")
     display_news_in_column(col3, low_news, "낮음", "🟢", "#27ae60", "low")
 
-
 def render_playbook():
-    """대응 플레이북 탭 렌더링"""
     if not st.session_state.analysis_started:
         st.info("👈 사이드바에서 '분석 시작'을 눌러주세요.")
     else:
@@ -377,7 +330,6 @@ def render_playbook():
             st.dataframe(df_llm_kw, use_container_width=True)
 
 def render_favorites():
-    """즐겨찾기 탭 렌더링"""
     st.header("⭐ 즐겨찾기")
     saved_news = get_saved_news()
     saved_playbooks = get_saved_playbooks()
@@ -429,7 +381,6 @@ def render_favorites():
             st.info("저장된 뉴스 기사가 없습니다.")
             
 def render_footer():
-    """푸터 렌더링"""
     st.divider()
     st.markdown(
         """<div style="text-align:center;color:#888;padding:1rem;">
