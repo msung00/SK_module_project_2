@@ -448,7 +448,7 @@ def generate_article_summary(title: str, content: str, severity_label: str, comp
 def generate_playbook_with_llm(keywords, company_info, infrastructure, constraints, news_briefs=None):
     """
     - message.txt 의도 반영 통합 플레이북:
-      즉시/7일/30일 구간 + 탐지룰 + 커뮤니케이션 + 체크리스트
+      긴급/단기/중장기 구간 + 탐지룰 + 커뮤니케이션 + 체크리스트
     - LLM 인풋 및 결과 로그 저장
     - 중요 키워드 JSON 재요청
     """
@@ -459,7 +459,6 @@ def generate_playbook_with_llm(keywords, company_info, infrastructure, constrain
     mode_line = "가능한 저예산/간소화 모드를 우선 고려" if (constraints and any(x in constraints.lower() for x in ["저예산","budget","비용","한정"])) else "표준 모드로 실행"
     
     # 1) 본문 플레이북 생성 프롬프트
-    # '즉시', '7일', '30일'을 '긴급', '단기', '중장기'로 변경
     prompt = f"""
 당신은 중소기업 보안 전문가입니다. 아래 정보를 바탕으로 **통합 장문 대응 플레이북**을 작성하세요.
 - 중복되는 조치는 통합/정리
@@ -665,7 +664,7 @@ def create_pdf_report(report_data, company_name="중소기업"):
     pdf.set_font(base_font, "", body_size)
     _safe_multicell(pdf, report_data.get("playbook", ""), line_height=7.0, width=_usable_width(pdf), wrap_chars=100)
 
-    # 바이트 반환 (Streamlit download_button에 바로 사용 가능)
+    # 바이트 반환
     out = pdf.output(dest="S")
     if isinstance(out, str):
         out = out.encode("latin1", errors="ignore")
@@ -738,7 +737,6 @@ def delete_news_from_favorites(news_id):
     c.execute("DELETE FROM saved_news WHERE id = ?", (news_id,))
     conn.commit()
     conn.close()
-    # st.rerun() # This was the source of the extra rerun
 
 def save_playbook_to_favorites(playbook_title, playbook_content, report_summary, llm_selected_keywords):
     conn = sqlite3.connect('bookmarks.db')
@@ -775,7 +773,6 @@ def delete_playbook_from_favorites(playbook_id):
     c.execute("DELETE FROM saved_playbooks WHERE id = ?", (playbook_id,))
     conn.commit()
     conn.close()
-    # st.rerun() # This was the source of the extra rerun
 
 # ============================================================
 # 7) 사이드바 (환경 설정 / RSS 전용)
